@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import sys
 import os
+import io
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -68,61 +69,151 @@ if selected_page == "Dashboard":
     st.write("✅ Memory database implemented")
     st.write("✅ Risk scoring engine implemented")
     st.write("✅ Protected AI chat — Week 3")
+    st.write("✅ Real file import (TXT, PDF, DOCX) — Week 3 bonus")
     st.write("⏳ Memory relationship graph — coming Week 5")
     st.write("⏳ Self-healing recovery — coming Week 6")
 
 # ─── ADD MEMORY ──────────────────────────────────────────────
 elif selected_page == "Add Memory":
     st.title("🧠 Add / Test Memory")
-    st.write("Enter information below. ContextLock will analyze it before storing.")
 
-    with st.form("add_memory_form"):
-        content = st.text_area("Information to store", placeholder="e.g. My project deadline is 20 October")
+    # ── TAB 1: Manual entry | TAB 2: File upload ──
+    tab1, tab2 = st.tabs(["✏️ Manual Entry", "📂 Import from File"])
 
-        col1, col2 = st.columns(2)
-        with col1:
-            source_type = st.selectbox("Source", [
-                "user_direct", "uploaded_document", "agent_generated",
-                "website", "unknown_email", "quarantined_source"
-            ])
-        with col2:
-            context = st.selectbox("Current task context", [
-                "general", "project_management", "email_communication",
-                "document_summary", "task_creation", "security_settings"
-            ])
+    # ── MANUAL ENTRY ──
+    with tab1:
+        st.write("Enter information below. ContextLock will analyze it before storing.")
 
-        submitted = st.form_submit_button("🔍 Analyze & Save")
+        with st.form("add_memory_form"):
+            content = st.text_area(
+                "Information to store",
+                placeholder="e.g. My project deadline is 20 October"
+            )
 
-    if submitted and content.strip():
-        analysis = analyze_memory(content, source_type, context)
+            col1, col2 = st.columns(2)
+            with col1:
+                source_type = st.selectbox("Source", [
+                    "user_direct", "uploaded_document", "agent_generated",
+                    "website", "unknown_email", "quarantined_source"
+                ])
+            with col2:
+                context = st.selectbox("Current task context", [
+                    "general", "project_management", "email_communication",
+                    "document_summary", "task_creation", "security_settings"
+                ])
 
-        st.divider()
-        st.subheader("🛡️ ContextLock Analysis")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Trust Score", f"{analysis['trust_score']}/100")
-        col2.metric("Risk Score", f"{analysis['risk_score']}/100")
-        col3.write(f"**Decision:** {analysis['decision_text']}")
+            submitted = st.form_submit_button("🔍 Analyze & Save")
 
-        st.write("**Risk reasons:**")
-        for reason in analysis["reasons"]:
-            st.write(f"- {reason}")
+        if submitted and content.strip():
+            analysis = analyze_memory(content, source_type, context)
 
-        memory_id = save_memory(
-            content=content,
-            source_type=source_type,
-            source_reference="manual_entry",
-            context=context,
-            trust_score=analysis["trust_score"],
-            risk_score=analysis["risk_score"],
-            status=analysis["status"],
-            allowed_contexts=analysis["allowed_contexts"],
-            allowed_actions=analysis["allowed_actions"],
-            content_hash=analysis["content_hash"],
+            st.divider()
+            st.subheader("🛡️ ContextLock Analysis")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Trust Score", f"{analysis['trust_score']}/100")
+            col2.metric("Risk Score", f"{analysis['risk_score']}/100")
+            col3.write(f"**Decision:** {analysis['decision_text']}")
+
+            st.write("**Risk reasons:**")
+            for reason in analysis["reasons"]:
+                st.write(f"- {reason}")
+
+            memory_id = save_memory(
+                content=content,
+                source_type=source_type,
+                source_reference="manual_entry",
+                context=context,
+                trust_score=analysis["trust_score"],
+                risk_score=analysis["risk_score"],
+                status=analysis["status"],
+                allowed_contexts=analysis["allowed_contexts"],
+                allowed_actions=analysis["allowed_actions"],
+                content_hash=analysis["content_hash"],
+            )
+            st.success(f"✅ Memory #{memory_id} saved with status: **{analysis['status']}**")
+
+        elif submitted:
+            st.warning("Please enter some information to analyze.")
+
+    # ── FILE UPLOAD ──
+    with tab2:
+        st.write("Upload a file — ContextLock will extract the text and analyze it.")
+
+        uploaded_file = st.file_uploader(
+            "Upload a file to extract memories from",
+            type=["txt", "pdf", "docx", "md"]
         )
-        st.success(f"Memory #{memory_id} saved with status: **{analysis['status']}**")
 
-    elif submitted:
-        st.warning("Please enter some information to analyze.")
+        if uploaded_file:
+            content = ""
+
+            # TXT and MD
+            if uploaded_file.type in ["text/plain", "text/markdown"]:
+                content = uploaded_file.read().decode("utf-8")
+
+            # PDF
+            elif uploaded_file.type == "application/pdf":
+                try:
+                    import pdfplumber
+                    with pdfplumber.open(io.BytesIO(uploaded_file.read())) as pdf:
+                        content = "\n".join(
+                            page.extract_text() or "" for page in pdf.pages
+                        )
+                except ImportError:
+                    st.error("Run: pip install pdfplumber")
+
+            # DOCX
+            elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                try:
+                    from docx import Document
+                    doc = Document(io.BytesIO(uploaded_file.read()))
+                    content = "\n".join(
+                        p.text for p in doc.paragraphs if p.text.strip()
+                    )
+                except ImportError:
+                    st.error("Run: pip install python-docx")
+
+            if content:
+                st.success(f"✅ Extracted {len(content)} characters from **{uploaded_file.name}**")
+                st.text_area(
+                    "Extracted content (editable before saving)",
+                    value=content[:2000],
+                    height=200,
+                    key="file_content"
+                )
+
+                source_type = "uploaded_document"
+                context = "document_summary"
+
+                if st.button("🔍 Analyze & Save File Content"):
+                    analysis = analyze_memory(content[:1000], source_type, context)
+
+                    st.divider()
+                    st.subheader("🛡️ ContextLock Analysis")
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Trust Score", f"{analysis['trust_score']}/100")
+                    col2.metric("Risk Score", f"{analysis['risk_score']}/100")
+                    col3.write(f"**Decision:** {analysis['decision_text']}")
+
+                    st.write("**Risk reasons:**")
+                    for reason in analysis["reasons"]:
+                        st.write(f"- {reason}")
+
+                    memory_id = save_memory(
+                        content=content[:1000],
+                        source_type=source_type,
+                        source_reference=uploaded_file.name,
+                        context=context,
+                        trust_score=analysis["trust_score"],
+                        risk_score=analysis["risk_score"],
+                        status=analysis["status"],
+                        allowed_contexts=analysis["allowed_contexts"],
+                        allowed_actions=analysis["allowed_actions"],
+                        content_hash=analysis["content_hash"],
+                    )
+                    st.success(f"✅ File memory #{memory_id} saved with status: **{analysis['status']}**")
+            else:
+                st.warning("Could not extract text from this file. Try a different format.")
 
 # ─── MEMORY EXPLORER ─────────────────────────────────────────
 elif selected_page == "Memory Explorer":
@@ -180,15 +271,12 @@ elif selected_page == "💬 Protected Chat":
     st.title("💬 Protected Chat")
     st.caption("This chatbot only uses memories with **Active** security status. Quarantined memories are never used.")
 
-    # Load only safe/active memories
     safe_memories = get_active_memories()
 
-    # Stats bar
     col1, col2 = st.columns(2)
     col1.info(f"🔒 {len(safe_memories)} trusted memories in context")
     col2.error(f"🚫 {counts['quarantined']} quarantined memories blocked")
 
-    # Show loaded context (optional)
     if safe_memories:
         with st.expander("👁️ View trusted memory context"):
             for m in safe_memories:
@@ -198,25 +286,20 @@ elif selected_page == "💬 Protected Chat":
 
     st.divider()
 
-    # Chat history using session state
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    # Display chat history
     for chat in st.session_state.chat_history:
         with st.chat_message(chat["role"]):
             st.write(chat["message"])
 
-    # Chat input
     user_input = st.chat_input("Ask something... (e.g. What is my project?)")
 
     if user_input:
-        # Show user message
         with st.chat_message("user"):
             st.write(user_input)
         st.session_state.chat_history.append({"role": "user", "message": user_input})
 
-        # Generate response from safe memories only
         question_lower = user_input.lower()
         matched = []
 
@@ -234,12 +317,10 @@ elif selected_page == "💬 Protected Chat":
         else:
             response = "I have no trusted memories to answer from. Please add safe memories first using the **Add Memory** page."
 
-        # Show bot response
         with st.chat_message("assistant", avatar="🛡️"):
             st.markdown(response)
         st.session_state.chat_history.append({"role": "assistant", "message": response})
 
-    # Clear chat button
     if st.session_state.chat_history:
         if st.button("🗑️ Clear chat history"):
             st.session_state.chat_history = []
